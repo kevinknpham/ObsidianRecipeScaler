@@ -1,14 +1,19 @@
+/*
+TODO:
+add plural forms of units
+*/
+
 import { App, Editor, MarkdownRenderChild, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 
 const SCALE_FACTOR_PATTERN = /^(x|\/)\d+$/;
 const SCALABLE_QUANTITY_PATTERN = /^((\d+((\.\d+)|( \d+\/\d+))?)|(\d+\/\d+))( [a-zA-Z ]+)?$/;
 
 interface RecipeScalerSettings {
-	scaleFactor: string;
+	defaultScaleFactor: string;
 }
 
 const DEFAULT_SETTINGS: RecipeScalerSettings = {
-	scaleFactor: 'x1'
+	defaultScaleFactor: 'x1'
 }
 
 export default class RecipeScaler extends Plugin {
@@ -17,9 +22,44 @@ export default class RecipeScaler extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		const scaleFactor = this.getScaleFactorFromString(this.settings.scaleFactor);
+		const scaleFactor = this.getScaleFactorFromString(this.settings.defaultScaleFactor);
+
+		// this.registerMarkdownCodeBlockProcessor('recipeconfig', (source, el, context) => {
+		// 	try {
+		// 		const overrideConfigs = JSON.parse(source);
+				
+		// 		scaleFactor = this.getScaleFactorFromString(overrideConfigs['scale']);
+
+		// 		el.createEl('p', {text: `ScaleFactor: ${overrideConfigs['scale']}`});
+		// 	} catch (e) {
+		// 		// Do nothing
+		// 		console.log(e);
+		// 	}
+		// }, 0);
+
+		// this.registerMarkdownPostProcessor((element, context) => {
+		// 	const configOverrideBlock = element.querySelector('.language-json');
+
+		// 	if (configOverrideBlock) {
+		// 		console.log(configOverrideBlock);
+		// 		const configOverrideCode = configOverrideBlock.querySelector('code');
+		// 		if (configOverrideCode) {
+		// 			let configOverride;
+		// 			try {
+		// 				configOverride = JSON.parse(configOverrideCode.innerHTML);
+		// 			} catch (e) {
+		// 				return;
+		// 			}
+		// 			context
+		// 		}
+		// 	}
+
+		// 	console.log(configOverrideBlock ? configOverrideBlock.innerText : 'whoops');
+		// }, 0);
 
 		this.registerMarkdownPostProcessor((element, context) => {
+			console.log(`scalefactor is ${scaleFactor}`);
+
 			const codeblocks = element.querySelectorAll("code");
 
       for (let index = 0; index < codeblocks.length; index++) {
@@ -31,7 +71,7 @@ export default class RecipeScaler extends Plugin {
         }
       }
 
-    });
+    }, 1);
 
 		// This adds a settings tab so the user can configure various aspects of the plugin
 		this.addSettingTab(new ScalingSettingsTab(this.app, this));
@@ -53,8 +93,10 @@ export default class RecipeScaler extends Plugin {
 	getScaleFactorFromString(rawScaleFactor : string) : number {
 		if (rawScaleFactor[0] === 'x') {
 			return +rawScaleFactor.substring(1);
-		} else {
+		} else if (rawScaleFactor[1] === '/') {
 			return 1 / (+rawScaleFactor.substring(1));
+		} else {
+			throw new Error("Invalid scale factor");
 		}
 	}
 
@@ -83,15 +125,15 @@ class ScalingSettingsTab extends PluginSettingTab {
 		containerEl.createEl('h2', {text: 'Settings for Recipe Scaler.'});
 
 		new Setting(containerEl)
-      .setName("Scaling factor")
-      .setDesc("Factor by which to scale recipes.  Should be x or / followed by an integer.")
+      .setName("Default scale factor")
+      .setDesc("Factor by which to scale recipes by default.  Should be x or / followed by an integer.")
       .addText((text) =>
         text
           .setPlaceholder("x1")
-          .setValue(this.plugin.settings.scaleFactor)
+          .setValue(this.plugin.settings.defaultScaleFactor)
           .onChange(async (value) => {
 						if (SCALE_FACTOR_PATTERN.test(value)) {
-							this.plugin.settings.scaleFactor = value;
+							this.plugin.settings.defaultScaleFactor = value;
 							await this.plugin.saveSettings();
 						}
           })
@@ -133,8 +175,10 @@ class ScaledQuantity extends MarkdownRenderChild {
 	}
 
 	static PLURAL_FORMS : Record<string, string> = {
-		cup: 'cups',
-		gallon: 'gallons'
+		tsp: 'tsp',
+		tbsp: 'tbsp',
+		g: 'g',
+		kg: 'kg'
 	}
 
 	text: string;
@@ -195,16 +239,10 @@ class ScaledQuantity extends MarkdownRenderChild {
 			unit = spaceIndex == -1 ? '' : this.text.substring(spaceIndex + 1);
 		}
 
-		console.table({amountWhole, fractionString, unit});
-
 		const [numerator, denominator] : number[] = fractionString.split('/').map(el => +el);
-
-		console.table({numerator, denominator});
 
 		const currTotalFractionNumerator : number = amountWhole * denominator + numerator;
 		const scaledNumerator = currTotalFractionNumerator * this.scaleFactor;
-
-		console.table({currTotalFractionNumerator, scaledNumerator});
 
 		const unitAliased = ScaledQuantity.ALT_NAMES[unit] ?? unit;
 
@@ -218,18 +256,17 @@ class ScaledQuantity extends MarkdownRenderChild {
 
 		const [finalNumerator, finalDenominator] : number[] = this.reduceFraction(convertedNumerator, denominator);
 
-		console.table({
-			finalDenominator,
-			finalNumerator
-		})
-
 		let finalAmountText;
 		if (finalDenominator === 1) {
 			finalAmountText = finalNumerator;
 		} else {
-			finalAmountText = `${Math.floor(finalNumerator / finalDenominator)} ${finalNumerator % finalDenominator}/${finalDenominator}`;
+			const finalAmountTextWholePortion = Math.floor(finalNumerator / finalDenominator);
+			if (finalAmountTextWholePortion === 0) {
+				finalAmountText = `${finalNumerator % finalDenominator}/${finalDenominator}`;
+			} else {
+				finalAmountText = `${finalAmountTextWholePortion} ${finalNumerator % finalDenominator}/${finalDenominator}`;
+			}
 		}
-
 		const finalText = finalAmountText + (finalUnit.length == 0 ? '' : ` ${finalUnit}`);
 
 		return this.containerEl.createSpan({text : finalText});
@@ -243,17 +280,16 @@ class ScaledQuantity extends MarkdownRenderChild {
 			let lastRemainder = numerator;
 
 			while (true){
-				console.table({n, d})
-					lastRemainder = remainder;
-					remainder = denominator % numerator;
-					if (remainder === 0){
-							break;
-					}
-					denominator = numerator;
-					numerator = remainder;
+				lastRemainder = remainder;
+				remainder = denominator % numerator;
+				if (remainder === 0){
+					break;
+				}
+				denominator = numerator;
+				numerator = remainder;
 			}
 			if(lastRemainder){
-					return lastRemainder;
+				return lastRemainder;
 			}
 			return 0;
 		};
